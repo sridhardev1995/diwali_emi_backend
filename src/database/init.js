@@ -153,6 +153,7 @@ async function initializeDatabase() {
       enrollment_id    INT NOT NULL,
       week_number      INT NOT NULL,
       amount           DECIMAL(10,2) NOT NULL,
+
       payment_mode     ENUM(
                          'Cash',
                          'UPI',
@@ -162,6 +163,8 @@ async function initializeDatabase() {
                        ) NOT NULL DEFAULT 'Cash',
 
       payment_date     DATE NOT NULL,
+
+      receipt_number   VARCHAR(30) NULL,
 
       payment_group_id VARCHAR(100) NULL,
 
@@ -190,10 +193,9 @@ async function initializeDatabase() {
   `);
 
   // ============================================================
-  // EXISTING DATABASE MIGRATION
+  // EXISTING DATABASE MIGRATION - DIWALI PAYMENTS
   //
-  // If diwali_payment_transactions already existed from the old
-  // version, add the new columns without destroying old data.
+  // Existing data will NOT be deleted.
   // ============================================================
 
   const [paymentColumns] = await connection.query(`
@@ -204,7 +206,15 @@ async function initializeDatabase() {
   `, [process.env.DB_NAME]);
 
   const existingPaymentColumns =
-    new Set(paymentColumns.map(row => row.COLUMN_NAME));
+    new Set(
+      paymentColumns.map(
+        row => row.COLUMN_NAME
+      )
+    );
+
+  // ------------------------------------------------------------
+  // payment_group_id
+  // ------------------------------------------------------------
 
   if (!existingPaymentColumns.has('payment_group_id')) {
     await connection.query(`
@@ -213,6 +223,22 @@ async function initializeDatabase() {
       AFTER payment_date
     `);
   }
+
+  // ------------------------------------------------------------
+  // receipt_number
+  // ------------------------------------------------------------
+
+  if (!existingPaymentColumns.has('receipt_number')) {
+    await connection.query(`
+      ALTER TABLE diwali_payment_transactions
+      ADD COLUMN receipt_number VARCHAR(30) NULL
+      AFTER payment_date
+    `);
+  }
+
+  // ------------------------------------------------------------
+  // status
+  // ------------------------------------------------------------
 
   if (!existingPaymentColumns.has('status')) {
     await connection.query(`
@@ -223,6 +249,10 @@ async function initializeDatabase() {
     `);
   }
 
+  // ------------------------------------------------------------
+  // reversed_at
+  // ------------------------------------------------------------
+
   if (!existingPaymentColumns.has('reversed_at')) {
     await connection.query(`
       ALTER TABLE diwali_payment_transactions
@@ -231,6 +261,10 @@ async function initializeDatabase() {
     `);
   }
 
+  // ------------------------------------------------------------
+  // reversed_by
+  // ------------------------------------------------------------
+
   if (!existingPaymentColumns.has('reversed_by')) {
     await connection.query(`
       ALTER TABLE diwali_payment_transactions
@@ -238,6 +272,10 @@ async function initializeDatabase() {
       AFTER reversed_at
     `);
   }
+
+  // ------------------------------------------------------------
+  // reversal_reason
+  // ------------------------------------------------------------
 
   if (!existingPaymentColumns.has('reversal_reason')) {
     await connection.query(`
@@ -349,6 +387,148 @@ async function initializeDatabase() {
         (enrollment_id, week_no),
 
       INDEX idx_emi_installments_due_date (due_date)
+    ) ENGINE=InnoDB
+  `);
+
+  // ============================================================
+  // EMI PAYMENT TRANSACTIONS
+  //
+  // Stores every individual EMI payment.
+  //
+  // Supports:
+  // - Cash
+  // - UPI
+  // - Split payment
+  // - Payment history
+  // - Future payment reversal
+  // - Receipt number
+  // ============================================================
+
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS emi_payment_transactions (
+      id               INT AUTO_INCREMENT PRIMARY KEY,
+
+      enrollment_id    INT NOT NULL,
+
+      installment_id   INT NOT NULL,
+
+      amount           DECIMAL(12,2) NOT NULL,
+
+      payment_mode     ENUM('Cash','UPI') NOT NULL,
+
+      payment_date     DATE NOT NULL,
+
+      receipt_number   VARCHAR(30) NULL,
+
+      status           ENUM('Active','Reversed')
+                       NOT NULL DEFAULT 'Active',
+
+      reversed_at      DATETIME NULL,
+
+      reversed_by      INT NULL,
+
+      reversal_reason  VARCHAR(500) NULL,
+
+      created_at       TIMESTAMP NOT NULL
+                       DEFAULT CURRENT_TIMESTAMP,
+
+      updated_at       TIMESTAMP NOT NULL
+                       DEFAULT CURRENT_TIMESTAMP
+                       ON UPDATE CURRENT_TIMESTAMP,
+
+      CONSTRAINT fk_emi_payment_enrollment
+        FOREIGN KEY (enrollment_id)
+        REFERENCES enrollments(id)
+        ON DELETE CASCADE,
+
+      CONSTRAINT fk_emi_payment_installment
+        FOREIGN KEY (installment_id)
+        REFERENCES emi_installments(id)
+        ON DELETE CASCADE,
+
+      CONSTRAINT fk_emi_payment_reversed_by
+        FOREIGN KEY (reversed_by)
+        REFERENCES admins(id)
+        ON DELETE SET NULL,
+
+      INDEX idx_emi_payment_enrollment
+        (enrollment_id),
+
+      INDEX idx_emi_payment_installment
+        (installment_id),
+
+      INDEX idx_emi_payment_date
+        (payment_date),
+
+      INDEX idx_emi_payment_mode
+        (payment_mode),
+
+      INDEX idx_emi_payment_status
+        (status)
+    ) ENGINE=InnoDB
+  `);
+
+  // ============================================================
+  // EXISTING DATABASE MIGRATION - EMI PAYMENTS
+  //
+  // Existing data will NOT be deleted.
+  // ============================================================
+
+  const [emiPaymentColumns] = await connection.query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = ?
+      AND TABLE_NAME = 'emi_payment_transactions'
+  `, [process.env.DB_NAME]);
+
+  const existingEmiPaymentColumns =
+    new Set(
+      emiPaymentColumns.map(
+        row => row.COLUMN_NAME
+      )
+    );
+
+  if (
+    !existingEmiPaymentColumns.has(
+      'receipt_number'
+    )
+  ) {
+    await connection.query(`
+      ALTER TABLE emi_payment_transactions
+      ADD COLUMN receipt_number VARCHAR(30) NULL
+      AFTER payment_date
+    `);
+  }
+
+  // ============================================================
+  // SHARED RECEIPT SEQUENCE
+  //
+  // One sequence is shared by:
+  // - Diwali payments
+  // - EMI payments
+  //
+  // Example:
+  //
+  // SMC-26-27-000001
+  // SMC-26-27-000002
+  // SMC-26-27-000003
+  //
+  // New financial year:
+  //
+  // SMC-27-28-000001
+  // ============================================================
+
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS receipt_sequences (
+      financial_year VARCHAR(9) NOT NULL,
+      next_number    INT NOT NULL DEFAULT 1,
+
+      created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+      updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                     ON UPDATE CURRENT_TIMESTAMP,
+
+      PRIMARY KEY (financial_year)
     ) ENGINE=InnoDB
   `);
 

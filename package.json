@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "description": "Diwali Scheme & EMI Scheme Management - Backend API",
  "main": "src/server.js",
-  "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
-  },
+"scripts": {
+  "start": "node src/server.js",
+  "dev": "nodemon src/server.js",
+  "seed": "node src/database/seed.js"
+},
   "dependencies": {
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",

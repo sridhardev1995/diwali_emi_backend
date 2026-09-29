@@ -1,6 +1,10 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
 
+const {
+  getNextReceiptNumber,
+} = require('../utils/receiptNumber');
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -40,19 +44,25 @@ async function enroll({ customerId, schemeId, chits }) {
   try {
     await connection.beginTransaction();
 
-    if (!Number.isInteger(Number(chits)) || Number(chits) <= 0) {
-      throw new Error('Chits must be a positive whole number');
+    if (
+      !Number.isInteger(Number(chits)) ||
+      Number(chits) <= 0
+    ) {
+      throw new Error(
+        'Chits must be a positive whole number'
+      );
     }
 
-    const [schemeRows] = await connection.query(
-      `
-      SELECT *
-      FROM diwali_schemes
-      WHERE id = ?
-      LIMIT 1
-      `,
-      [schemeId]
-    );
+    const [schemeRows] =
+      await connection.query(
+        `
+        SELECT *
+        FROM diwali_schemes
+        WHERE id = ?
+        LIMIT 1
+        `,
+        [schemeId]
+      );
 
     const scheme = schemeRows[0];
 
@@ -61,43 +71,61 @@ async function enroll({ customerId, schemeId, chits }) {
     }
 
     if (scheme.status !== 'Active') {
-      throw new Error('Cannot enroll into an inactive scheme');
+      throw new Error(
+        'Cannot enroll into an inactive scheme'
+      );
     }
 
-    const [result] = await connection.query(
-      `
-      INSERT INTO diwali_enrollments
-      (
-        customer_id,
-        scheme_id,
-        original_chits,
-        current_chits,
-        status
-      )
-      VALUES (?, ?, ?, ?, 'Active')
-      `,
-      [
-        customerId,
-        schemeId,
-        chits,
-        chits
-      ]
-    );
+    const [result] =
+      await connection.query(
+        `
+        INSERT INTO diwali_enrollments
+        (
+          customer_id,
+          scheme_id,
+          original_chits,
+          current_chits,
+          status
+        )
+        VALUES (?, ?, ?, ?, 'Active')
+        `,
+        [
+          customerId,
+          schemeId,
+          chits,
+          chits
+        ]
+      );
 
-    const enrollmentId = result.insertId;
+    const enrollmentId =
+      result.insertId;
 
-    const durationWeeks = Number(scheme.duration_weeks);
-    const chitValue = Number(scheme.chit_value);
+    const durationWeeks =
+      Number(scheme.duration_weeks);
+
+    const chitValue =
+      Number(scheme.chit_value);
 
     const weeklyRows = [];
 
-    for (let week = 1; week <= durationWeeks; week++) {
+    for (
+      let week = 1;
+      week <= durationWeeks;
+      week++
+    ) {
       weeklyRows.push([
         enrollmentId,
         week,
-        addDays(scheme.start_date, (week - 1) * 7),
+        addDays(
+          scheme.start_date,
+          (week - 1) * 7
+        ),
         chits,
-        Math.round(chitValue * chits * 100) / 100,
+        Math.round(
+          chitValue *
+          chits *
+          100
+        ) / 100,
         0,
         null,
         null,
@@ -128,15 +156,28 @@ async function enroll({ customerId, schemeId, chits }) {
 
     return {
       enrollmentId,
-      weeklyAmount: chitValue * chits,
-      totalPayable: chitValue * chits * durationWeeks,
+      weeklyAmount:
+        chitValue * chits,
+
+      totalPayable:
+        chitValue *
+        chits *
+        durationWeeks,
+
       maturityReturn:
-        (chitValue * durationWeeks + Number(scheme.bonus_per_chit)) *
-        chits
+        (
+          chitValue *
+          durationWeeks +
+          Number(
+            scheme.bonus_per_chit
+          )
+        ) * chits
     };
+
   } catch (err) {
     await connection.rollback();
     throw err;
+
   } finally {
     connection.release();
   }
@@ -153,76 +194,100 @@ async function findAll({
   schemeId = '',
   status = ''
 }) {
-  const offset = (page - 1) * limit;
+  const offset =
+    (page - 1) * limit;
 
   const params = [];
-  let where = 'WHERE 1=1';
+
+  let where =
+    'WHERE 1=1';
 
   if (customerId) {
-    where += ' AND e.customer_id = ?';
+    where +=
+      ' AND e.customer_id = ?';
+
     params.push(customerId);
   }
 
   if (schemeId) {
-    where += ' AND e.scheme_id = ?';
+    where +=
+      ' AND e.scheme_id = ?';
+
     params.push(schemeId);
   }
 
   if (status) {
-    where += ' AND e.status = ?';
+    where +=
+      ' AND e.status = ?';
+
     params.push(status);
   }
 
-  const [rows] = await pool.query(
-    `
-    SELECT
-      e.*,
-      c.name AS customer_name,
-      c.phone AS customer_phone,
-      s.scheme_name,
-      s.chit_value,
-      s.bonus_per_chit,
-      s.duration_weeks,
-      COALESCE(
-        (
-          SELECT SUM(w.amount_due)
-          FROM diwali_enrollment_weeks w
-          WHERE w.enrollment_id = e.id
-        ),
-        0
-      ) AS total_due,
-      COALESCE(
-        (
-          SELECT SUM(w.amount_paid)
-          FROM diwali_enrollment_weeks w
-          WHERE w.enrollment_id = e.id
-        ),
-        0
-      ) AS total_paid
-    FROM diwali_enrollments e
-    JOIN customers c
-      ON c.id = e.customer_id
-    JOIN diwali_schemes s
-      ON s.id = e.scheme_id
-    ${where}
-    ORDER BY e.id DESC
-    LIMIT ? OFFSET ?
-    `,
-    [...params, Number(limit), Number(offset)]
-  );
+  const [rows] =
+    await pool.query(
+      `
+      SELECT
+        e.*,
+        c.name AS customer_name,
+        c.phone AS customer_phone,
+        s.scheme_name,
+        s.chit_value,
+        s.bonus_per_chit,
+        s.duration_weeks,
 
-  const [countRows] = await pool.query(
-    `
-    SELECT COUNT(*) AS total
-    FROM diwali_enrollments e
-    ${where}
-    `,
-    params
-  );
+        COALESCE(
+          (
+            SELECT SUM(w.amount_due)
+            FROM diwali_enrollment_weeks w
+            WHERE w.enrollment_id = e.id
+          ),
+          0
+        ) AS total_due,
+
+        COALESCE(
+          (
+            SELECT SUM(w.amount_paid)
+            FROM diwali_enrollment_weeks w
+            WHERE w.enrollment_id = e.id
+          ),
+          0
+        ) AS total_paid
+
+      FROM diwali_enrollments e
+
+      JOIN customers c
+        ON c.id = e.customer_id
+
+      JOIN diwali_schemes s
+        ON s.id = e.scheme_id
+
+      ${where}
+
+      ORDER BY e.id DESC
+
+      LIMIT ? OFFSET ?
+      `,
+      [
+        ...params,
+        Number(limit),
+        Number(offset)
+      ]
+    );
+
+  const [countRows] =
+    await pool.query(
+      `
+      SELECT COUNT(*) AS total
+      FROM diwali_enrollments e
+      ${where}
+      `,
+      params
+    );
 
   return {
     rows,
-    total: countRows[0].total
+    total:
+      countRows[0].total
   };
 }
 
@@ -231,28 +296,34 @@ async function findAll({
 // ============================================================
 
 async function findById(id) {
-  const [rows] = await pool.query(
-    `
-    SELECT
-      e.*,
-      c.name AS customer_name,
-      c.phone AS customer_phone,
-      c.address AS customer_address,
-      s.scheme_name,
-      s.chit_value,
-      s.bonus_per_chit,
-      s.duration_weeks,
-      s.start_date
-    FROM diwali_enrollments e
-    JOIN customers c
-      ON c.id = e.customer_id
-    JOIN diwali_schemes s
-      ON s.id = e.scheme_id
-    WHERE e.id = ?
-    LIMIT 1
-    `,
-    [id]
-  );
+  const [rows] =
+    await pool.query(
+      `
+      SELECT
+        e.*,
+        c.name AS customer_name,
+        c.phone AS customer_phone,
+        c.address AS customer_address,
+        s.scheme_name,
+        s.chit_value,
+        s.bonus_per_chit,
+        s.duration_weeks,
+        s.start_date
+
+      FROM diwali_enrollments e
+
+      JOIN customers c
+        ON c.id = e.customer_id
+
+      JOIN diwali_schemes s
+        ON s.id = e.scheme_id
+
+      WHERE e.id = ?
+
+      LIMIT 1
+      `,
+      [id]
+    );
 
   return rows[0] || null;
 }
@@ -261,16 +332,19 @@ async function findById(id) {
 // WEEK LIST
 // ============================================================
 
-async function getWeeks(enrollmentId) {
-  const [rows] = await pool.query(
-    `
-    SELECT *
-    FROM diwali_enrollment_weeks
-    WHERE enrollment_id = ?
-    ORDER BY week_number ASC
-    `,
-    [enrollmentId]
-  );
+async function getWeeks(
+  enrollmentId
+) {
+  const [rows] =
+    await pool.query(
+      `
+      SELECT *
+      FROM diwali_enrollment_weeks
+      WHERE enrollment_id = ?
+      ORDER BY week_number ASC
+      `,
+      [enrollmentId]
+    );
 
   return rows;
 }
@@ -279,38 +353,55 @@ async function getWeeks(enrollmentId) {
 // SINGLE WEEK
 // ============================================================
 
-async function getWeek(enrollmentId, weekNumber) {
-  const [rows] = await pool.query(
-    `
-    SELECT *
-    FROM diwali_enrollment_weeks
-    WHERE enrollment_id = ?
-      AND week_number = ?
-    LIMIT 1
-    `,
-    [enrollmentId, weekNumber]
-  );
+async function getWeek(
+  enrollmentId,
+  weekNumber
+) {
+  const [rows] =
+    await pool.query(
+      `
+      SELECT *
+      FROM diwali_enrollment_weeks
+      WHERE enrollment_id = ?
+        AND week_number = ?
+      LIMIT 1
+      `,
+      [
+        enrollmentId,
+        weekNumber
+      ]
+    );
 
   return rows[0] || null;
 }
 
 // ============================================================
-// RECALCULATE WEEK FROM ACTIVE TRANSACTIONS
+// RECALCULATE WEEK
+// FROM ACTIVE TRANSACTIONS
 // ============================================================
 
-async function recalculateWeek(connection, enrollmentId, weekNumber) {
-  const [weekRows] = await connection.query(
-    `
-    SELECT *
-    FROM diwali_enrollment_weeks
-    WHERE enrollment_id = ?
-      AND week_number = ?
-    FOR UPDATE
-    `,
-    [enrollmentId, weekNumber]
-  );
+async function recalculateWeek(
+  connection,
+  enrollmentId,
+  weekNumber
+) {
+  const [weekRows] =
+    await connection.query(
+      `
+      SELECT *
+      FROM diwali_enrollment_weeks
+      WHERE enrollment_id = ?
+        AND week_number = ?
+      FOR UPDATE
+      `,
+      [
+        enrollmentId,
+        weekNumber
+      ]
+    );
 
-  const week = weekRows[0];
+  const week =
+    weekRows[0];
 
   if (!week) {
     throw new Error(
@@ -318,46 +409,67 @@ async function recalculateWeek(connection, enrollmentId, weekNumber) {
     );
   }
 
-  const [paymentRows] = await connection.query(
-    `
-    SELECT
-      COALESCE(SUM(amount), 0) AS total_paid,
-      MAX(payment_date) AS latest_payment_date
-    FROM diwali_payment_transactions
-    WHERE enrollment_id = ?
-      AND week_number = ?
-      AND status = 'Active'
-    `,
-    [enrollmentId, weekNumber]
-  );
+  const [paymentRows] =
+    await connection.query(
+      `
+      SELECT
+        COALESCE(
+          SUM(amount),
+          0
+        ) AS total_paid,
 
-  const totalPaid = Number(paymentRows[0].total_paid || 0);
+        MAX(payment_date)
+          AS latest_payment_date
 
-  const status = getWeekStatus(
-    Number(week.amount_due),
-    totalPaid
-  );
+      FROM diwali_payment_transactions
+
+      WHERE enrollment_id = ?
+        AND week_number = ?
+        AND status = 'Active'
+      `,
+      [
+        enrollmentId,
+        weekNumber
+      ]
+    );
+
+  const totalPaid =
+    Number(
+      paymentRows[0].total_paid || 0
+    );
+
+  const status =
+    getWeekStatus(
+      Number(week.amount_due),
+      totalPaid
+    );
 
   const latestPaymentDate =
     totalPaid > 0
-      ? paymentRows[0].latest_payment_date
+      ? paymentRows[0]
+          .latest_payment_date
       : null;
 
-  const [modeRows] = await connection.query(
-    `
-    SELECT payment_mode
-    FROM diwali_payment_transactions
-    WHERE enrollment_id = ?
-      AND week_number = ?
-      AND status = 'Active'
-    ORDER BY id DESC
-    LIMIT 1
-    `,
-    [enrollmentId, weekNumber]
-  );
+  const [modeRows] =
+    await connection.query(
+      `
+      SELECT payment_mode
+      FROM diwali_payment_transactions
+      WHERE enrollment_id = ?
+        AND week_number = ?
+        AND status = 'Active'
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+      [
+        enrollmentId,
+        weekNumber
+      ]
+    );
 
   const latestPaymentMode =
-    modeRows[0]?.payment_mode || null;
+    modeRows[0]?.payment_mode ||
+    null;
 
   await connection.query(
     `
@@ -367,6 +479,7 @@ async function recalculateWeek(connection, enrollmentId, weekNumber) {
       payment_date = ?,
       payment_mode = ?,
       status = ?
+
     WHERE enrollment_id = ?
       AND week_number = ?
     `,
@@ -382,15 +495,38 @@ async function recalculateWeek(connection, enrollmentId, weekNumber) {
 
   return {
     ...week,
-    amount_paid: totalPaid,
-    payment_date: latestPaymentDate,
-    payment_mode: latestPaymentMode,
+
+    amount_paid:
+      totalPaid,
+
+    payment_date:
+      latestPaymentDate,
+
+    payment_mode:
+      latestPaymentMode,
+
     status
   };
 }
 
 // ============================================================
 // SINGLE / MULTIPLE WEEK PAYMENT
+//
+// Receipt behaviour:
+//
+// Single payment:
+//   SMC-26-27-000001
+//
+// Multiple payment / split payment:
+//   All rows use SAME receipt number.
+//
+// Example:
+//
+// Cash ₹500
+// UPI  ₹500
+//
+// Both:
+//   SMC-26-27-000002
 // ============================================================
 
 async function payWeek(
@@ -403,78 +539,179 @@ async function payWeek(
     payments
   }
 ) {
-  const connection = await pool.getConnection();
+  const connection =
+    await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const paymentItems = Array.isArray(payments)
-      ? payments
-      : [
-          {
-            amountPaid,
-            paymentDate,
-            paymentMode
-          }
-        ];
+    // --------------------------------------------------------
+    // Normalize payment items
+    // --------------------------------------------------------
+
+    const paymentItems =
+      Array.isArray(payments)
+        ? payments
+        : [
+            {
+              amountPaid,
+              paymentDate,
+              paymentMode
+            }
+          ];
 
     if (!paymentItems.length) {
-      throw new Error('At least one payment is required');
+      throw new Error(
+        'At least one payment is required'
+      );
     }
 
-    const groupId = createPaymentGroupId();
+    // --------------------------------------------------------
+    // Create payment group
+    // --------------------------------------------------------
 
-    for (const payment of paymentItems) {
-      const amount = Number(payment.amountPaid);
+    const groupId =
+      createPaymentGroupId();
 
-      if (!Number.isFinite(amount) || amount <= 0) {
-        throw new Error('Payment amount must be greater than zero');
+    // --------------------------------------------------------
+    // Receipt date
+    //
+    // For multiple payment items, use the first payment date.
+    // --------------------------------------------------------
+
+    const receiptDate =
+      paymentItems[0].paymentDate ||
+      paymentDate ||
+      new Date()
+        .toISOString()
+        .slice(0, 10);
+
+    // --------------------------------------------------------
+    // Generate ONE receipt number
+    //
+    // IMPORTANT:
+    // All payment rows in this call use the same receipt.
+    // --------------------------------------------------------
+
+    const receiptNumber =
+      await getNextReceiptNumber(
+        connection,
+        receiptDate
+      );
+
+    // --------------------------------------------------------
+    // Insert payment transactions
+    // --------------------------------------------------------
+
+    for (
+      const payment of paymentItems
+    ) {
+      const amount =
+        Number(
+          payment.amountPaid
+        );
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        throw new Error(
+          'Payment amount must be greater than zero'
+        );
       }
 
       const date =
         payment.paymentDate ||
-        new Date().toISOString().slice(0, 10);
+        paymentDate ||
+        new Date()
+          .toISOString()
+          .slice(0, 10);
 
       const mode =
-        payment.paymentMode || 'Cash';
+        payment.paymentMode ||
+        paymentMode ||
+        'Cash';
 
-      const [weekRows] = await connection.query(
-        `
-        SELECT *
-        FROM diwali_enrollment_weeks
-        WHERE enrollment_id = ?
-          AND week_number = ?
-        FOR UPDATE
-        `,
-        [enrollmentId, weekNumber]
-      );
+      // ------------------------------------------------------
+      // Lock week
+      // ------------------------------------------------------
 
-      const week = weekRows[0];
+      const [weekRows] =
+        await connection.query(
+          `
+          SELECT *
+          FROM diwali_enrollment_weeks
+          WHERE enrollment_id = ?
+            AND week_number = ?
+          FOR UPDATE
+          `,
+          [
+            enrollmentId,
+            weekNumber
+          ]
+        );
+
+      const week =
+        weekRows[0];
 
       if (!week) {
-        throw new Error('Week not found');
+        throw new Error(
+          'Week not found'
+        );
       }
 
-      const [paidRows] = await connection.query(
-        `
-        SELECT COALESCE(SUM(amount), 0) AS paid
-        FROM diwali_payment_transactions
-        WHERE enrollment_id = ?
-          AND week_number = ?
-          AND status = 'Active'
-        `,
-        [enrollmentId, weekNumber]
-      );
+      // ------------------------------------------------------
+      // Get current active paid amount
+      // ------------------------------------------------------
 
-      const currentPaid = Number(paidRows[0].paid || 0);
+      const [paidRows] =
+        await connection.query(
+          `
+          SELECT
+            COALESCE(
+              SUM(amount),
+              0
+            ) AS paid
+
+          FROM diwali_payment_transactions
+
+          WHERE enrollment_id = ?
+            AND week_number = ?
+            AND status = 'Active'
+          `,
+          [
+            enrollmentId,
+            weekNumber
+          ]
+        );
+
+      const currentPaid =
+        Number(
+          paidRows[0].paid || 0
+        );
+
       const outstanding =
-        Number(week.amount_due) - currentPaid;
+        Number(
+          week.amount_due
+        ) -
+        currentPaid;
 
-      if (amount > outstanding) {
+      // ------------------------------------------------------
+      // Prevent overpayment
+      // ------------------------------------------------------
+
+      if (
+        amount >
+        outstanding + 0.001
+      ) {
         throw new Error(
           `Payment exceeds outstanding amount. Outstanding: ₹${outstanding.toFixed(2)}`
         );
       }
+
+      // ------------------------------------------------------
+      // Insert payment
+      // ------------------------------------------------------
 
       await connection.query(
         `
@@ -485,10 +722,11 @@ async function payWeek(
           amount,
           payment_mode,
           payment_date,
+          receipt_number,
           payment_group_id,
           status
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'Active')
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'Active')
         `,
         [
           enrollmentId,
@@ -496,26 +734,47 @@ async function payWeek(
           amount,
           mode,
           date,
+          receiptNumber,
           groupId
         ]
       );
     }
 
-    await recalculateWeek(
-      connection,
-      enrollmentId,
-      weekNumber
-    );
+    // --------------------------------------------------------
+    // Recalculate week
+    // --------------------------------------------------------
+
+    const updatedWeek =
+      await recalculateWeek(
+        connection,
+        enrollmentId,
+        weekNumber
+      );
+
+    // --------------------------------------------------------
+    // Commit
+    // --------------------------------------------------------
 
     await connection.commit();
 
+    // --------------------------------------------------------
+    // Return
+    // --------------------------------------------------------
+
     return {
-      paymentGroupId: groupId,
-      week: await getWeek(enrollmentId, weekNumber)
+      paymentGroupId:
+        groupId,
+
+      receiptNumber,
+
+      week:
+        updatedWeek
     };
+
   } catch (err) {
     await connection.rollback();
     throw err;
+
   } finally {
     connection.release();
   }
@@ -530,70 +789,107 @@ async function modifyChits(
   fromWeekNumber,
   newChits
 ) {
-  const connection = await pool.getConnection();
+  const connection =
+    await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    if (!Number.isInteger(Number(newChits)) || Number(newChits) <= 0) {
-      throw new Error('newChits must be a positive whole number');
+    if (
+      !Number.isInteger(
+        Number(newChits)
+      ) ||
+      Number(newChits) <= 0
+    ) {
+      throw new Error(
+        'newChits must be a positive whole number'
+      );
     }
 
-    const [enrollmentRows] = await connection.query(
-      `
-      SELECT *
-      FROM diwali_enrollments
-      WHERE id = ?
-      FOR UPDATE
-      `,
-      [enrollmentId]
-    );
+    const [enrollmentRows] =
+      await connection.query(
+        `
+        SELECT *
+        FROM diwali_enrollments
+        WHERE id = ?
+        FOR UPDATE
+        `,
+        [enrollmentId]
+      );
 
-    const enrollment = enrollmentRows[0];
+    const enrollment =
+      enrollmentRows[0];
 
     if (!enrollment) {
-      throw new Error('Enrollment not found');
+      throw new Error(
+        'Enrollment not found'
+      );
     }
 
-    const [schemeRows] = await connection.query(
-      `
-      SELECT *
-      FROM diwali_schemes
-      WHERE id = ?
-      `,
-      [enrollment.scheme_id]
-    );
+    const [schemeRows] =
+      await connection.query(
+        `
+        SELECT *
+        FROM diwali_schemes
+        WHERE id = ?
+        `,
+        [enrollment.scheme_id]
+      );
 
-    const scheme = schemeRows[0];
+    const scheme =
+      schemeRows[0];
 
-    const [weeks] = await connection.query(
-      `
-      SELECT *
-      FROM diwali_enrollment_weeks
-      WHERE enrollment_id = ?
-        AND week_number >= ?
-      ORDER BY week_number ASC
-      FOR UPDATE
-      `,
-      [enrollmentId, fromWeekNumber]
-    );
+    const [weeks] =
+      await connection.query(
+        `
+        SELECT *
+        FROM diwali_enrollment_weeks
+        WHERE enrollment_id = ?
+          AND week_number >= ?
+        ORDER BY week_number ASC
+        FOR UPDATE
+        `,
+        [
+          enrollmentId,
+          fromWeekNumber
+        ]
+      );
 
     let totalExcess = 0;
+
     const sourceWeeks = [];
 
-    // First calculate excess created by reducing chit count.
-    for (const week of weeks) {
-      const oldDue = Number(week.amount_due);
-      const newDue =
-        Number(scheme.chit_value) * Number(newChits);
+    // --------------------------------------------------------
+    // Calculate excess
+    // --------------------------------------------------------
 
-      const paid = Number(week.amount_paid);
+    for (const week of weeks) {
+      const oldDue =
+        Number(
+          week.amount_due
+        );
+
+      const newDue =
+        Number(
+          scheme.chit_value
+        ) *
+        Number(newChits);
+
+      const paid =
+        Number(
+          week.amount_paid
+        );
 
       if (paid > newDue) {
-        const excess = paid - newDue;
+        const excess =
+          paid - newDue;
 
-        totalExcess += excess;
-        sourceWeeks.push(week.week_number);
+        totalExcess +=
+          excess;
+
+        sourceWeeks.push(
+          week.week_number
+        );
 
         await connection.query(
           `
@@ -611,6 +907,7 @@ async function modifyChits(
             week.id
           ]
         );
+
       } else {
         await connection.query(
           `
@@ -629,47 +926,71 @@ async function modifyChits(
       }
     }
 
-    // Apply excess to upcoming weeks oldest first.
+    // --------------------------------------------------------
+    // Apply excess to upcoming weeks
+    // --------------------------------------------------------
+
     if (totalExcess > 0) {
-      const [futureWeeks] = await connection.query(
-        `
-        SELECT *
-        FROM diwali_enrollment_weeks
-        WHERE enrollment_id = ?
-          AND week_number > ?
-          AND status <> 'Paid'
-        ORDER BY week_number ASC
-        FOR UPDATE
-        `,
-        [enrollmentId, fromWeekNumber]
-      );
+      const [futureWeeks] =
+        await connection.query(
+          `
+          SELECT *
+          FROM diwali_enrollment_weeks
+          WHERE enrollment_id = ?
+            AND week_number > ?
+            AND status <> 'Paid'
+          ORDER BY week_number ASC
+          FOR UPDATE
+          `,
+          [
+            enrollmentId,
+            fromWeekNumber
+          ]
+        );
 
-      let remainingExcess = totalExcess;
+      let remainingExcess =
+        totalExcess;
 
-      for (const week of futureWeeks) {
-        if (remainingExcess <= 0) {
+      for (
+        const week of futureWeeks
+      ) {
+        if (
+          remainingExcess <= 0
+        ) {
           break;
         }
 
         const outstanding =
-          Number(week.amount_due) -
-          Number(week.amount_paid);
+          Number(
+            week.amount_due
+          ) -
+          Number(
+            week.amount_paid
+          );
 
-        if (outstanding <= 0) {
+        if (
+          outstanding <= 0
+        ) {
           continue;
         }
 
-        const applied = Math.min(
-          remainingExcess,
-          outstanding
-        );
+        const applied =
+          Math.min(
+            remainingExcess,
+            outstanding
+          );
 
         const newPaid =
-          Number(week.amount_paid) + applied;
+          Number(
+            week.amount_paid
+          ) +
+          applied;
 
         const newStatus =
           getWeekStatus(
-            Number(week.amount_due),
+            Number(
+              week.amount_due
+            ),
             newPaid
           );
 
@@ -711,12 +1032,20 @@ async function modifyChits(
           ]
         );
 
-        remainingExcess -= applied;
+        remainingExcess -=
+          applied;
       }
 
       totalExcess =
-        Math.max(0, remainingExcess);
+        Math.max(
+          0,
+          remainingExcess
+        );
     }
+
+    // --------------------------------------------------------
+    // Update enrollment chits
+    // --------------------------------------------------------
 
     await connection.query(
       `
@@ -734,12 +1063,16 @@ async function modifyChits(
 
     return {
       enrollmentId,
-      currentChits: newChits,
-      remainingExcess: totalExcess
+      currentChits:
+        newChits,
+      remainingExcess:
+        totalExcess
     };
+
   } catch (err) {
     await connection.rollback();
     throw err;
+
   } finally {
     connection.release();
   }
@@ -749,16 +1082,19 @@ async function modifyChits(
 // ADJUSTMENT LOGS
 // ============================================================
 
-async function getAdjustmentLogs(enrollmentId) {
-  const [rows] = await pool.query(
-    `
-    SELECT *
-    FROM diwali_adjustment_logs
-    WHERE enrollment_id = ?
-    ORDER BY id DESC
-    `,
-    [enrollmentId]
-  );
+async function getAdjustmentLogs(
+  enrollmentId
+) {
+  const [rows] =
+    await pool.query(
+      `
+      SELECT *
+      FROM diwali_adjustment_logs
+      WHERE enrollment_id = ?
+      ORDER BY id DESC
+      `,
+      [enrollmentId]
+    );
 
   return rows;
 }
@@ -768,25 +1104,31 @@ async function getAdjustmentLogs(enrollmentId) {
 // ============================================================
 
 async function todayDue() {
-  const [rows] = await pool.query(
-    `
-    SELECT
-      w.*,
-      e.customer_id,
-      c.name AS customer_name,
-      c.phone AS customer_phone,
-      e.current_chits
-    FROM diwali_enrollment_weeks w
-    JOIN diwali_enrollments e
-      ON e.id = w.enrollment_id
-    JOIN customers c
-      ON c.id = e.customer_id
-    WHERE w.due_date = CURDATE()
-      AND w.status <> 'Paid'
-      AND e.status = 'Active'
-    ORDER BY c.name ASC
-    `
-  );
+  const [rows] =
+    await pool.query(
+      `
+      SELECT
+        w.*,
+        e.customer_id,
+        c.name AS customer_name,
+        c.phone AS customer_phone,
+        e.current_chits
+
+      FROM diwali_enrollment_weeks w
+
+      JOIN diwali_enrollments e
+        ON e.id = w.enrollment_id
+
+      JOIN customers c
+        ON c.id = e.customer_id
+
+      WHERE w.due_date = CURDATE()
+        AND w.status <> 'Paid'
+        AND e.status = 'Active'
+
+      ORDER BY c.name ASC
+      `
+    );
 
   return rows;
 }
@@ -796,25 +1138,31 @@ async function todayDue() {
 // ============================================================
 
 async function overdue() {
-  const [rows] = await pool.query(
-    `
-    SELECT
-      w.*,
-      e.customer_id,
-      c.name AS customer_name,
-      c.phone AS customer_phone,
-      e.current_chits
-    FROM diwali_enrollment_weeks w
-    JOIN diwali_enrollments e
-      ON e.id = w.enrollment_id
-    JOIN customers c
-      ON c.id = e.customer_id
-    WHERE w.due_date < CURDATE()
-      AND w.status <> 'Paid'
-      AND e.status = 'Active'
-    ORDER BY w.due_date ASC
-    `
-  );
+  const [rows] =
+    await pool.query(
+      `
+      SELECT
+        w.*,
+        e.customer_id,
+        c.name AS customer_name,
+        c.phone AS customer_phone,
+        e.current_chits
+
+      FROM diwali_enrollment_weeks w
+
+      JOIN diwali_enrollments e
+        ON e.id = w.enrollment_id
+
+      JOIN customers c
+        ON c.id = e.customer_id
+
+      WHERE w.due_date < CURDATE()
+        AND w.status <> 'Paid'
+        AND e.status = 'Active'
+
+      ORDER BY w.due_date ASC
+      `
+    );
 
   return rows;
 }
@@ -824,19 +1172,27 @@ async function overdue() {
 // ============================================================
 
 async function todayCollectionSummary() {
-  const [rows] = await pool.query(
-    `
-    SELECT
-      t.payment_mode,
-      COUNT(*) AS transaction_count,
-      COALESCE(SUM(t.amount), 0) AS total_amount
-    FROM diwali_payment_transactions t
-    WHERE t.payment_date = CURDATE()
-      AND t.status = 'Active'
-    GROUP BY t.payment_mode
-    ORDER BY t.payment_mode
-    `
-  );
+  const [rows] =
+    await pool.query(
+      `
+      SELECT
+        t.payment_mode,
+        COUNT(*) AS transaction_count,
+        COALESCE(
+          SUM(t.amount),
+          0
+        ) AS total_amount
+
+      FROM diwali_payment_transactions t
+
+      WHERE t.payment_date = CURDATE()
+        AND t.status = 'Active'
+
+      GROUP BY t.payment_mode
+
+      ORDER BY t.payment_mode
+      `
+    );
 
   return rows;
 }
@@ -844,8 +1200,21 @@ async function todayCollectionSummary() {
 // ============================================================
 // BULK PAYMENT
 //
-// Automatically applies amount oldest-first to unpaid/partial
-// weeks.
+// Automatically applies amount oldest-first
+// to unpaid/partial weeks.
+//
+// One bulk payment = ONE receipt number.
+//
+// Example:
+//
+// Week 1 = ₹1000
+// Week 2 = ₹1000
+// Week 3 = ₹500
+//
+// Receipt:
+// SMC-26-27-000020
+//
+// All three transactions use the same receipt number.
 // ============================================================
 
 async function bulkPay(
@@ -856,48 +1225,101 @@ async function bulkPay(
     paymentMode
   }
 ) {
-  const connection = await pool.getConnection();
+  const connection =
+    await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const amount = Number(totalAmount);
+    const amount =
+      Number(totalAmount);
 
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error('Bulk payment amount must be greater than zero');
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      throw new Error(
+        'Bulk payment amount must be greater than zero'
+      );
     }
 
-    const groupId = createPaymentGroupId();
+    const groupId =
+      createPaymentGroupId();
 
-    const [weeks] = await connection.query(
-      `
-      SELECT *
-      FROM diwali_enrollment_weeks
-      WHERE enrollment_id = ?
-        AND status <> 'Paid'
-      ORDER BY week_number ASC
-      FOR UPDATE
-      `,
-      [enrollmentId]
-    );
+    // --------------------------------------------------------
+    // Payment date
+    // --------------------------------------------------------
 
-    let remaining = amount;
+    const actualPaymentDate =
+      paymentDate ||
+      new Date()
+        .toISOString()
+        .slice(0, 10);
+
+    // --------------------------------------------------------
+    // Generate ONE receipt number
+    //
+    // Every week covered by this bulk payment
+    // will use this same receipt number.
+    // --------------------------------------------------------
+
+    const receiptNumber =
+      await getNextReceiptNumber(
+        connection,
+        actualPaymentDate
+      );
+
+    // --------------------------------------------------------
+    // Get unpaid / partial weeks
+    // Oldest first = FIFO
+    // --------------------------------------------------------
+
+    const [weeks] =
+      await connection.query(
+        `
+        SELECT *
+        FROM diwali_enrollment_weeks
+        WHERE enrollment_id = ?
+          AND status <> 'Paid'
+        ORDER BY week_number ASC
+        FOR UPDATE
+        `,
+        [enrollmentId]
+      );
+
+    let remaining =
+      amount;
+
+    // --------------------------------------------------------
+    // Apply payment FIFO
+    // --------------------------------------------------------
 
     for (const week of weeks) {
-      if (remaining <= 0) {
+      if (
+        remaining <= 0
+      ) {
         break;
       }
 
       const outstanding =
-        Number(week.amount_due) -
-        Number(week.amount_paid);
+        Number(
+          week.amount_due
+        ) -
+        Number(
+          week.amount_paid
+        );
 
-      if (outstanding <= 0) {
+      if (
+        outstanding <= 0
+      ) {
         continue;
       }
 
       const applied =
-        Math.min(remaining, outstanding);
+        Math.min(
+          remaining,
+          outstanding
+        );
 
       await connection.query(
         `
@@ -908,18 +1330,19 @@ async function bulkPay(
           amount,
           payment_mode,
           payment_date,
+          receipt_number,
           payment_group_id,
           status
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'Active')
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'Active')
         `,
         [
           enrollmentId,
           week.week_number,
           applied,
           paymentMode || 'Cash',
-          paymentDate ||
-            new Date().toISOString().slice(0, 10),
+          actualPaymentDate,
+          receiptNumber,
           groupId
         ]
       );
@@ -930,10 +1353,17 @@ async function bulkPay(
         week.week_number
       );
 
-      remaining -= applied;
+      remaining -=
+        applied;
     }
 
-    if (remaining > 0) {
+    // --------------------------------------------------------
+    // Prevent overpayment
+    // --------------------------------------------------------
+
+    if (
+      remaining > 0
+    ) {
       throw new Error(
         `Payment exceeds total outstanding amount by ₹${remaining.toFixed(2)}`
       );
@@ -942,13 +1372,22 @@ async function bulkPay(
     await connection.commit();
 
     return {
-      paymentGroupId: groupId,
-      totalAmount: amount,
-      appliedAmount: amount
+      paymentGroupId:
+        groupId,
+
+      receiptNumber,
+
+      totalAmount:
+        amount,
+
+      appliedAmount:
+        amount
     };
+
   } catch (err) {
     await connection.rollback();
     throw err;
+
   } finally {
     connection.release();
   }
@@ -961,25 +1400,33 @@ async function bulkPay(
 async function getPaymentTransactions(
   enrollmentId
 ) {
-  const [rows] = await pool.query(
-    `
-    SELECT
-      t.*,
-      a.username AS reversed_by_username
-    FROM diwali_payment_transactions t
-    LEFT JOIN admins a
-      ON a.id = t.reversed_by
-    WHERE t.enrollment_id = ?
-    ORDER BY t.id DESC
-    `,
-    [enrollmentId]
-  );
+  const [rows] =
+    await pool.query(
+      `
+      SELECT
+        t.*,
+        a.username AS reversed_by_username
+
+      FROM diwali_payment_transactions t
+
+      LEFT JOIN admins a
+        ON a.id = t.reversed_by
+
+      WHERE t.enrollment_id = ?
+
+      ORDER BY t.id DESC
+      `,
+      [enrollmentId]
+    );
 
   return rows;
 }
 
 // ============================================================
 // SINGLE PAYMENT REVERT
+//
+// Receipt number is preserved.
+// It will NEVER be reused.
 // ============================================================
 
 async function revertPayment(
@@ -987,29 +1434,39 @@ async function revertPayment(
   adminId,
   reason
 ) {
-  const connection = await pool.getConnection();
+  const connection =
+    await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const [transactionRows] = await connection.query(
-      `
-      SELECT *
-      FROM diwali_payment_transactions
-      WHERE id = ?
-      FOR UPDATE
-      `,
-      [transactionId]
-    );
+    const [transactionRows] =
+      await connection.query(
+        `
+        SELECT *
+        FROM diwali_payment_transactions
+        WHERE id = ?
+        FOR UPDATE
+        `,
+        [transactionId]
+      );
 
-    const transaction = transactionRows[0];
+    const transaction =
+      transactionRows[0];
 
     if (!transaction) {
-      throw new Error('Payment transaction not found');
+      throw new Error(
+        'Payment transaction not found'
+      );
     }
 
-    if (transaction.status === 'Reversed') {
-      throw new Error('Payment transaction is already reversed');
+    if (
+      transaction.status ===
+      'Reversed'
+    ) {
+      throw new Error(
+        'Payment transaction is already reversed'
+      );
     }
 
     await connection.query(
@@ -1039,13 +1496,27 @@ async function revertPayment(
 
     return {
       transactionId,
-      enrollmentId: transaction.enrollment_id,
-      weekNumber: transaction.week_number,
-      reversedAmount: Number(transaction.amount)
+
+      enrollmentId:
+        transaction.enrollment_id,
+
+      weekNumber:
+        transaction.week_number,
+
+      reversedAmount:
+        Number(
+          transaction.amount
+        ),
+
+      receiptNumber:
+        transaction.receipt_number ||
+        null
     };
+
   } catch (err) {
     await connection.rollback();
     throw err;
+
   } finally {
     connection.release();
   }
@@ -1054,8 +1525,10 @@ async function revertPayment(
 // ============================================================
 // BULK PAYMENT REVERT
 //
-// Reverts every Active transaction belonging to the same
-// payment_group_id.
+// Reverts every Active transaction belonging
+// to the same payment_group_id.
+//
+// Receipt number is preserved.
 // ============================================================
 
 async function revertBulkPayment(
@@ -1063,23 +1536,29 @@ async function revertBulkPayment(
   adminId,
   reason
 ) {
-  const connection = await pool.getConnection();
+  const connection =
+    await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    const [transactions] = await connection.query(
-      `
-      SELECT *
-      FROM diwali_payment_transactions
-      WHERE payment_group_id = ?
-        AND status = 'Active'
-      FOR UPDATE
-      `,
-      [paymentGroupId]
-    );
+    const [transactions] =
+      await connection.query(
+        `
+        SELECT *
+        FROM diwali_payment_transactions
 
-    if (!transactions.length) {
+        WHERE payment_group_id = ?
+          AND status = 'Active'
+
+        FOR UPDATE
+        `,
+        [paymentGroupId]
+      );
+
+    if (
+      !transactions.length
+    ) {
       throw new Error(
         'No active payment transactions found for this payment group'
       );
@@ -1093,6 +1572,7 @@ async function revertBulkPayment(
         reversed_at = NOW(),
         reversed_by = ?,
         reversal_reason = ?
+
       WHERE payment_group_id = ?
         AND status = 'Active'
       `,
@@ -1103,16 +1583,25 @@ async function revertBulkPayment(
       ]
     );
 
-    const affectedWeeks = new Set();
+    const affectedWeeks =
+      new Set();
 
-    for (const transaction of transactions) {
+    for (
+      const transaction
+      of transactions
+    ) {
       affectedWeeks.add(
         `${transaction.enrollment_id}:${transaction.week_number}`
       );
     }
 
-    for (const key of affectedWeeks) {
-      const [enrollmentId, weekNumber] =
+    for (
+      const key of affectedWeeks
+    ) {
+      const [
+        enrollmentId,
+        weekNumber
+      ] =
         key.split(':');
 
       await recalculateWeek(
@@ -1122,22 +1611,37 @@ async function revertBulkPayment(
       );
     }
 
-    const totalReversed = transactions.reduce(
-      (sum, item) =>
-        sum + Number(item.amount),
-      0
-    );
+    const totalReversed =
+      transactions.reduce(
+        (sum, item) =>
+          sum +
+          Number(item.amount),
+        0
+      );
+
+    // All transactions in a payment group
+    // should have the same receipt number.
+    const receiptNumber =
+      transactions[0]
+        ?.receipt_number || null;
 
     await connection.commit();
 
     return {
       paymentGroupId,
-      transactionCount: transactions.length,
-      totalReversed
+
+      transactionCount:
+        transactions.length,
+
+      totalReversed,
+
+      receiptNumber
     };
+
   } catch (err) {
     await connection.rollback();
     throw err;
+
   } finally {
     connection.release();
   }
