@@ -11,6 +11,8 @@ const enrollmentController =
 const installmentController =
   require('../controllers/emiInstallmentController');
 
+  const emiProfitReportController =
+  require('../controllers/emiProfitReportController.js');
 
 // ============================================================
 // EMI SCHEMES
@@ -161,6 +163,16 @@ router.get(
 router.post(
   '/emis/:id/reverse-payment',
   installmentController.reversePayment
+);
+
+// ============================================================
+// EMI PROFIT REPORT
+// GET /api/reports/emi-profit
+// ============================================================
+
+router.get(
+  '/reports/emi-profit',
+  emiProfitReportController.getEmiProfitReport
 );
 
 

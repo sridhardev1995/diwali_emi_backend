@@ -14,6 +14,9 @@ const dashboardRoutes =
   require('./routes/dashboardRoutes');
 const verifyToken = require('./middleware/auth');
 
+const todayCollectionRoutes =
+  require('./routes/todayCollectionRoutes');
+
 const app = express();
 
 
@@ -133,6 +136,12 @@ app.use(
   emiPaymentReportRoutes
 );
 
+
+app.use(
+  '/api/collections',
+  verifyToken,
+  todayCollectionRoutes
+);
 
 // ============================================================
 // 404

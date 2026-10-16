@@ -95,4 +95,120 @@ async function profile(req, res) {
   }
 }
 
-module.exports = { login, changePassword, profile };
+async function resetPassword(req, res) {
+  try {
+    const {
+      username,
+      recoveryPin,
+      newPassword,
+    } = req.body;
+
+    // ============================================================
+    // VALIDATION
+    // ============================================================
+
+    if (!username || !recoveryPin || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Username, recovery PIN and new password are required',
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'New password must be at least 6 characters',
+      });
+    }
+
+    // ============================================================
+    // FIND ADMIN
+    // ============================================================
+
+    const admin =
+      await adminModel.findByUsername(username);
+
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid username or recovery PIN',
+      });
+    }
+
+    // ============================================================
+    // CHECK ACCOUNT STATUS
+    // ============================================================
+
+    if (admin.status !== 'Active') {
+      return res.status(403).json({
+        success: false,
+        message: 'This admin account is inactive',
+      });
+    }
+
+    // ============================================================
+    // CHECK RECOVERY PIN
+    // ============================================================
+
+    if (!admin.recovery_pin_hash) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Recovery PIN is not configured for this admin',
+      });
+    }
+
+    const isPinMatch =
+      await bcrypt.compare(
+        recoveryPin,
+        admin.recovery_pin_hash,
+      );
+
+    if (!isPinMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid username or recovery PIN',
+      });
+    }
+
+    // ============================================================
+    // HASH NEW PASSWORD
+    // ============================================================
+
+    const newHash =
+      await bcrypt.hash(
+        newPassword,
+        SALT_ROUNDS,
+      );
+
+    // ============================================================
+    // UPDATE PASSWORD
+    // ============================================================
+
+    await adminModel.updatePassword(
+      admin.id,
+      newHash,
+    );
+
+    return res.json({
+      success: true,
+      message: 'Password reset successfully',
+    });
+  } catch (err) {
+    console.error(
+      'Reset password error:',
+      err,
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        'Server error while resetting password',
+    });
+  }
+}
+
+
+module.exports = { login, changePassword, profile , resetPassword };

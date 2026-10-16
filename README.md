@@ -57,3 +57,16 @@ Authorization: Bearer <token from login>
 - Weekly collection entry (Paid/Unpaid/Partial)
 - Chit quantity mid-scheme modification + excess adjustment log
 - Reports module (customer-wise, scheme-wise, date-wise, commission, overdue) with pagination
+
+
+<!-- DESCRIBE admins;
+
+
+USE diwali_emi;
+
+ALTER TABLE admins
+ADD COLUMN recovery_pin_hash VARCHAR(255) NULL
+AFTER password_hash; -->
+
+
+
