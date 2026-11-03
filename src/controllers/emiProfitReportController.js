@@ -1,6 +1,8 @@
+
 const pool = require('../config/db');
 
 const ALLOWED_STATUSES = ['Active', 'Closed', 'Cancelled'];
+const PROFIT_STATUSES = ['Active', 'Closed'];
 
 function isValidDate(value) {
   if (!value) return true;
@@ -23,7 +25,9 @@ function toNumber(value) {
 }
 
 function money(value) {
-  return Math.round((toNumber(value) + Number.EPSILON) * 100) / 100;
+  return (
+    Math.round((toNumber(value) + Number.EPSILON) * 100) / 100
+  );
 }
 
 // GET /api/reports/emi-profit
@@ -64,7 +68,8 @@ async function getEmiProfitReport(req, res) {
 
     if (
       customerId &&
-      (!Number.isInteger(Number(customerId)) || Number(customerId) <= 0)
+      (!Number.isInteger(Number(customerId)) ||
+        Number(customerId) <= 0)
     ) {
       return res.status(400).json({
         success: false,
@@ -74,7 +79,8 @@ async function getEmiProfitReport(req, res) {
 
     if (
       schemeId &&
-      (!Number.isInteger(Number(schemeId)) || Number(schemeId) <= 0)
+      (!Number.isInteger(Number(schemeId)) ||
+        Number(schemeId) <= 0)
     ) {
       return res.status(400).json({
         success: false,
@@ -84,10 +90,16 @@ async function getEmiProfitReport(req, res) {
 
     // --------------------------------------------------
     // FILTERS
-    // Date filtering is based on enrollment start_date.
+    //
+    // Cancelled enrollments are excluded from this report.
+    // Only Active and Closed enrollments are included.
+    // Date filtering uses enrollment start_date.
     // --------------------------------------------------
 
-    const conditions = [];
+    const conditions = [
+      "e.status IN ('Active', 'Closed')",
+    ];
+
     const params = [];
 
     if (startDate) {
@@ -101,6 +113,8 @@ async function getEmiProfitReport(req, res) {
     }
 
     if (status) {
+      // Cancelled status is rejected by the base filter
+      // above, even if the user explicitly selects it.
       conditions.push('e.status = ?');
       params.push(status);
     }
@@ -115,19 +129,17 @@ async function getEmiProfitReport(req, res) {
       params.push(Number(schemeId));
     }
 
-    const whereClause = conditions.length
-      ? `WHERE ${conditions.join(' AND ')}`
-      : '';
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
     // --------------------------------------------------
-    // CUSTOMER-WISE REPORT
+    // CUSTOMER-WISE EMI PROFIT REPORT
     //
-    // emi_payable = schedule total
-    // collected = Active payment transactions only
-    // commission = saved commission_amount
+    // total EMI payable = installment schedule total
+    // total collected = Active payment transactions
+    // commission = saved enrollment commission
     //
-    // Subqueries prevent payment/installment joins from
-    // multiplying amounts.
+    // Subqueries prevent payment/installment joins
+    // from multiplying the totals.
     // --------------------------------------------------
 
     const [rows] = await pool.query(
@@ -195,7 +207,7 @@ async function getEmiProfitReport(req, res) {
     );
 
     // --------------------------------------------------
-    // FORMAT ROWS
+    // FORMAT REPORT ROWS
     // --------------------------------------------------
 
     const data = rows.map((row) => {
@@ -217,8 +229,6 @@ async function getEmiProfitReport(req, res) {
         requestedAmount,
         commissionType: row.commission_type,
         commissionValue: money(row.commission_value),
-
-        // Expected commission according to saved enrollment data.
         commissionAmount,
 
         disbursedAmount,
@@ -233,19 +243,19 @@ async function getEmiProfitReport(req, res) {
           Math.max(totalEmiPayable - totalCollected, 0)
         ),
 
-        // This is not the same as net business profit.
+        // Expected commission, not net business profit.
         expectedCommission: commissionAmount,
       };
     });
 
     // --------------------------------------------------
     // SUMMARY
+    // Cancelled enrollments are already excluded by SQL.
     // --------------------------------------------------
 
     const summary = data.reduce(
       (totals, row) => {
         totals.enrollmentCount += 1;
-
         totals.totalRequestedAmount += row.requestedAmount;
         totals.totalCommission += row.commissionAmount;
         totals.totalDisbursed += row.disbursedAmount;
@@ -280,13 +290,17 @@ async function getEmiProfitReport(req, res) {
     return res.json({
       success: true,
       message: 'EMI profit report fetched successfully',
+
       filters: {
         startDate: startDate || null,
         endDate: endDate || null,
         status: status || null,
         customerId: customerId ? Number(customerId) : null,
         schemeId: schemeId ? Number(schemeId) : null,
+        includedStatuses: PROFIT_STATUSES,
+        excludedStatuses: ['Cancelled'],
       },
+
       summary,
       data,
     });

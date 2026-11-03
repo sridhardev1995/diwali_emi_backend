@@ -187,107 +187,124 @@ async function enroll({ customerId, schemeId, chits }) {
 // LIST
 // ============================================================
 
+
 async function findAll({
   page = 1,
   limit = 20,
   customerId = '',
   schemeId = '',
-  status = ''
+  status = '',
+  search = '',
 }) {
-  const offset =
-    (page - 1) * limit;
+  const offset = (Number(page) - 1) * Number(limit);
 
   const params = [];
-
-  let where =
-    'WHERE 1=1';
+  let where = 'WHERE 1 = 1';
 
   if (customerId) {
-    where +=
-      ' AND e.customer_id = ?';
-
+    where += ' AND e.customer_id = ?';
     params.push(customerId);
   }
 
   if (schemeId) {
-    where +=
-      ' AND e.scheme_id = ?';
-
+    where += ' AND e.scheme_id = ?';
     params.push(schemeId);
   }
 
   if (status) {
-    where +=
-      ' AND e.status = ?';
-
+    where += ' AND e.status = ?';
     params.push(status);
   }
 
-  const [rows] =
-    await pool.query(
-      `
-      SELECT
-        e.*,
-        c.name AS customer_name,
-        c.phone AS customer_phone,
-        s.scheme_name,
-        s.chit_value,
-        s.bonus_per_chit,
-        s.duration_weeks,
-
-        COALESCE(
-          (
-            SELECT SUM(w.amount_due)
-            FROM diwali_enrollment_weeks w
-            WHERE w.enrollment_id = e.id
-          ),
-          0
-        ) AS total_due,
-
-        COALESCE(
-          (
-            SELECT SUM(w.amount_paid)
-            FROM diwali_enrollment_weeks w
-            WHERE w.enrollment_id = e.id
-          ),
-          0
-        ) AS total_paid
-
-      FROM diwali_enrollments e
-
-      JOIN customers c
-        ON c.id = e.customer_id
-
-      JOIN diwali_schemes s
-        ON s.id = e.scheme_id
-
-      ${where}
-
-      ORDER BY e.id DESC
-
-      LIMIT ? OFFSET ?
-      `,
-      [
-        ...params,
-        Number(limit),
-        Number(offset)
-      ]
+  // Search by customer name or phone number.
+  if (search) {
+    // Treat user-entered %, _ and backslash as literal characters.
+    const escapedSearch = String(search).replace(
+      /[\\%_]/g,
+      '\\$&'
     );
 
-  const [countRows] =
-    await pool.query(
-      `
-      SELECT COUNT(*) AS total
-      FROM diwali_enrollments e
-      ${where}
-      `,
-      params
-    );
+    const like = `%${escapedSearch}%`;
+
+    where += `
+      AND (
+        c.name LIKE ? OR c.phone LIKE ?
+      )
+    `;
+
+    params.push(like, like);
+  }
+
+  const [rows] = await pool.query(
+    `
+    SELECT
+      e.*,
+      c.name AS customer_name,
+      c.phone AS customer_phone,
+      s.scheme_name,
+      s.chit_value,
+      s.bonus_per_chit,
+      s.duration_weeks,
+
+      COALESCE(
+        (
+          SELECT SUM(w.amount_due)
+          FROM diwali_enrollment_weeks w
+          WHERE w.enrollment_id = e.id
+        ),
+        0
+      ) AS total_due,
+
+      COALESCE(
+        (
+          SELECT SUM(w.amount_paid)
+          FROM diwali_enrollment_weeks w
+          WHERE w.enrollment_id = e.id
+        ),
+        0
+      ) AS total_paid
+
+    FROM diwali_enrollments e
+
+    JOIN customers c
+      ON c.id = e.customer_id
+
+    JOIN diwali_schemes s
+      ON s.id = e.scheme_id
+
+    ${where}
+
+    ORDER BY
+      e.current_chits DESC,
+      c.name ASC,
+      e.id DESC
+
+    LIMIT ? OFFSET ?
+    `,
+    [...params, Number(limit), Number(offset)]
+  );
+
+  // Count query must use the same joins and filters.
+  const [countRows] = await pool.query(
+    `
+    SELECT COUNT(*) AS total
+
+    FROM diwali_enrollments e
+
+    JOIN customers c
+      ON c.id = e.customer_id
+
+    JOIN diwali_schemes s
+      ON s.id = e.scheme_id
+
+    ${where}
+    `,
+    params
+  );
 
   return {
     rows,
-    total:
-      countRows[0].total
+    total: Number(countRows[0].total),
   };
 }
 
@@ -779,6 +796,126 @@ async function payWeek(
     connection.release();
   }
 }
+
+
+async function updateEnrollmentChits(enrollmentId, newChits) {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    if (!Number.isInteger(newChits) || newChits <= 0) {
+      throw new Error('Chits must be a positive whole number');
+    }
+
+    const [enrollments] = await connection.query(
+      `SELECT * FROM diwali_enrollments
+       WHERE id = ? FOR UPDATE`,
+      [enrollmentId]
+    );
+
+    const enrollment = enrollments[0];
+
+    if (!enrollment) {
+      throw new Error('Enrollment not found');
+    }
+
+    const [schemes] = await connection.query(
+      `SELECT * FROM diwali_schemes WHERE id = ?`,
+      [enrollment.scheme_id]
+    );
+
+    const scheme = schemes[0];
+
+    if (!scheme) {
+      throw new Error('Scheme not found');
+    }
+
+    const [weeks] = await connection.query(
+      `SELECT * FROM diwali_enrollment_weeks
+       WHERE enrollment_id = ?
+       ORDER BY week_number
+       FOR UPDATE`,
+      [enrollmentId]
+    );
+
+    if (!weeks.length) {
+      throw new Error('No enrollment weeks found');
+    }
+
+    const chitValue = Number(scheme.chit_value);
+
+    // Validate all weeks before making any changes.
+    for (const week of weeks) {
+      const [payments] = await connection.query(
+        `SELECT COALESCE(SUM(amount), 0) AS paid
+         FROM diwali_payment_transactions
+         WHERE enrollment_id = ?
+           AND week_number = ?
+           AND status = 'Active'`,
+        [enrollmentId, week.week_number]
+      );
+
+      const paid = Number(payments[0].paid);
+      const newDue = Math.round(chitValue * newChits * 100) / 100;
+
+      if (paid > newDue + 0.001) {
+        throw new Error(
+          `Week ${week.week_number} already has ₹${paid.toFixed(2)} in active payments. ` +
+          `New weekly due is ₹${newDue.toFixed(2)}. ` +
+          'Resolve the excess payment before updating enrollment chits.'
+        );
+      }
+    }
+
+    // Update every weekly installment.
+    for (const week of weeks) {
+      const newDue = Math.round(chitValue * newChits * 100) / 100;
+
+      await connection.query(
+        `UPDATE diwali_enrollment_weeks
+         SET chits = ?, amount_due = ?
+         WHERE id = ?`,
+        [newChits, newDue, week.id]
+      );
+
+      // Recalculate paid amount and status from actual transactions.
+      await recalculateWeek(
+        connection,
+        enrollmentId,
+        week.week_number
+      );
+    }
+
+    // Keep both enrollment quantities in sync.
+    await connection.query(
+      `UPDATE diwali_enrollments
+       SET original_chits = ?, current_chits = ?
+       WHERE id = ?`,
+      [newChits, newChits, enrollmentId]
+    );
+
+    await connection.commit();
+
+    return {
+      enrollmentId,
+      oldChits: Number(enrollment.original_chits),
+      newChits,
+      weeklyAmount: chitValue * newChits,
+      totalPayable:
+        chitValue * newChits * Number(scheme.duration_weeks),
+      maturityReturn:
+        (chitValue * Number(scheme.duration_weeks) +
+          Number(scheme.bonus_per_chit)) * newChits,
+    };
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+}
+
 
 // ============================================================
 // MODIFY CHITS
@@ -1647,6 +1784,79 @@ async function revertBulkPayment(
   }
 }
 
+
+// ============================================================
+// DELETE ENROLLMENT
+//
+// Allowed only when NO payment transactions exist
+// (Active or Reversed) so receipt history is never lost.
+// ============================================================
+
+async function deleteEnrollment(enrollmentId) {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [enrollmentRows] = await connection.query(
+      `SELECT * FROM diwali_enrollments
+       WHERE id = ? FOR UPDATE`,
+      [enrollmentId]
+    );
+
+    const enrollment = enrollmentRows[0];
+
+    if (!enrollment) {
+      throw new Error('Enrollment not found');
+    }
+
+    const [txnRows] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM diwali_payment_transactions
+       WHERE enrollment_id = ?`,
+      [enrollmentId]
+    );
+
+    if (Number(txnRows[0].total) > 0) {
+      throw new Error(
+        'Cannot delete: this enrollment has payment records. ' +
+        'Revert and clear payments first, or keep it for audit.'
+      );
+    }
+
+    await connection.query(
+      `DELETE FROM diwali_adjustment_logs
+       WHERE enrollment_id = ?`,
+      [enrollmentId]
+    );
+
+    await connection.query(
+      `DELETE FROM diwali_enrollment_weeks
+       WHERE enrollment_id = ?`,
+      [enrollmentId]
+    );
+
+    await connection.query(
+      `DELETE FROM diwali_enrollments
+       WHERE id = ?`,
+      [enrollmentId]
+    );
+
+    await connection.commit();
+
+    return {
+      enrollmentId,
+      customerId: enrollment.customer_id,
+      schemeId: enrollment.scheme_id,
+    };
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+}
+
 // ============================================================
 // EXPORT
 // ============================================================
@@ -1666,5 +1876,7 @@ module.exports = {
   bulkPay,
   getPaymentTransactions,
   revertPayment,
-  revertBulkPayment
+  revertBulkPayment,
+  updateEnrollmentChits,
+  deleteEnrollment,
 };

@@ -106,16 +106,17 @@ async function create(req, res) {
 // LIST
 // ============================================================
 
+
 async function list(req, res) {
   try {
     const page = Math.max(
-      parseInt(req.query.page) || 1,
+      parseInt(req.query.page, 10) || 1,
       1
     );
 
     const limit = Math.min(
       Math.max(
-        parseInt(req.query.limit) || 20,
+        parseInt(req.query.limit, 10) || 20,
         1
       ),
       100
@@ -124,19 +125,19 @@ async function list(req, res) {
     const {
       customerId = '',
       schemeId = '',
-      status = ''
+      status = '',
+      search = '',
     } = req.query;
 
-    const {
-      rows,
-      total
-    } = await diwaliEnrollmentModel.findAll({
-      page,
-      limit,
-      customerId,
-      schemeId,
-      status
-    });
+    const { rows, total } =
+      await diwaliEnrollmentModel.findAll({
+        page,
+        limit,
+        customerId,
+        schemeId,
+        status,
+        search: String(search).trim(),
+      });
 
     return res.json({
       success: true,
@@ -144,9 +145,9 @@ async function list(req, res) {
       pagination: {
         page,
         limit,
-        total,
-        totalPages: Math.ceil(total / limit)
-      }
+        total: Number(total),
+        totalPages: Math.ceil(Number(total) / limit),
+      },
     });
   } catch (err) {
     console.error(
@@ -156,8 +157,51 @@ async function list(req, res) {
 
     return res.status(500).json({
       success: false,
-      message:
-        'Server error while fetching enrollments'
+      message: 'Server error while fetching enrollments',
+    });
+  }
+}
+
+
+// ============================================================
+// UPDATE ENROLLMENT
+// ============================================================
+
+async function update(req, res) {
+  try {
+    const id = Number(req.params.id);
+    const chits = Number(req.body.chits);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid enrollment ID',
+      });
+    }
+
+    if (!Number.isInteger(chits) || chits <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Chits must be a positive whole number',
+      });
+    }
+
+    const result =
+      await diwaliEnrollmentModel.updateEnrollmentChits(id, chits);
+
+    return res.json({
+      success: true,
+      message: 'Enrollment chits updated successfully',
+      data: result,
+    });
+  } catch (err) {
+    console.error('Update enrollment error:', err);
+
+    const notFound = err.message === 'Enrollment not found';
+
+    return res.status(notFound ? 404 : 400).json({
+      success: false,
+      message: err.message || 'Unable to update enrollment',
     });
   }
 }
@@ -200,7 +244,7 @@ async function getOne(req, res) {
     const maturityReturn =
       (
         Number(enrollment.chit_value) *
-          Number(enrollment.duration_weeks) +
+        Number(enrollment.duration_weeks) +
         Number(enrollment.bonus_per_chit)
       ) *
       Number(enrollment.original_chits);
@@ -679,6 +723,41 @@ async function revertBulkPayment(req, res) {
 }
 
 // ============================================================
+// DELETE ENROLLMENT
+// ============================================================
+
+async function remove(req, res) {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid enrollment ID',
+      });
+    }
+
+    const result =
+      await diwaliEnrollmentModel.deleteEnrollment(id);
+
+    return res.json({
+      success: true,
+      message: 'Enrollment deleted successfully',
+      data: result,
+    });
+  } catch (err) {
+    console.error('Delete enrollment error:', err);
+
+    const notFound = err.message === 'Enrollment not found';
+
+    return res.status(notFound ? 404 : 400).json({
+      success: false,
+      message: err.message || 'Unable to delete enrollment',
+    });
+  }
+}
+
+// ============================================================
 // EXPORT
 // ============================================================
 
@@ -695,5 +774,7 @@ module.exports = {
   bulkPay,
   paymentHistory,
   revertPayment,
-  revertBulkPayment
+  revertBulkPayment,
+  update,
+  remove,
 };

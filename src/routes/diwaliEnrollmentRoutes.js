@@ -123,4 +123,11 @@ router.get(
   enrollmentController.getAdjustmentLogs
 );
 
+// UPDATE ENROLLMENT CHITS
+router.patch('/:id', enrollmentController.update);
+
+// DELETE ENROLLMENT (only if no payments exist)
+router.delete('/:id', enrollmentController.remove);
+
+
 module.exports = router;
