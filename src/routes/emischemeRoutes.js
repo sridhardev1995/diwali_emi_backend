@@ -176,6 +176,12 @@ router.get(
 );
 
 
+router.patch(
+  '/enrollments/:id/nominee',
+  enrollmentController.updateNominee
+);
+
+
 // ============================================================
 // EXPORT
 // ============================================================
